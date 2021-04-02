@@ -1,6 +1,5 @@
 ---
 title: "Comment on Pruitt et al (2012) 'Behavioral Types of Predator and Prey Jointly Determine Prey Survival: Potential Implications for the Maintenance of Within-Species Behavioral Variation'"
-author: "Sorbus torminalis"
 date: "`r Sys.Date()`"
 output:
   bookdown::pdf_document2:
@@ -69,7 +68,7 @@ n_ruggiero_rep <- 1000
 # Introduction
 
 Several articles co-authored by Professor Pruitt have been shown to contain unexplained duplications in the raw data (e.g., @Laskowski2020-retract).
-This comment reports an attempt to detect duplications in @Pruitt2012.
+This Comment reports an evaluation of whether such duplicates exist in the data for @Pruitt2012.
 
 ```{r n_snails}
 #range of number of snails per mesocosm
@@ -118,10 +117,10 @@ Size can be back-transformed to millimetres with the mean and standard deviation
 After back-transformation, a large fraction of the measurements (`r last_digit_out$percent_last1`%) end in a one, perhaps suggesting that the reported mean is 0.01 mm too large and that most snails were measured to one decimal place, and the rest to two. 
 This is supported by a second Excel sheet (`shell size by fear`) which reports snail sizes in millimetres (without metadata) has a similarly large fraction of measurements with a terminal zero.
 Mesocosms have between `r n_snails$min` and `r n_snails$mx` snails, whereas the article reports that 37--46 snails are used in each mesocosm: `r n_snails$low` mesocosms have fewer snails than the reported minimum.
-The number of snails per mesocosm is varied in replicates A and B, but mostly consistent in replicate C (Fig. \@ref(fig:n-snail-plot)).
-Within each mesocosm the data are sorted by survival and partially sorted by snail size (Fig. \@ref(fig:raw-data-plot)).
+The number of snails per mesocosm is varied in replicates A and B, but mostly consistent in replicate C.
+Within each mesocosm the data are sorted by survival and partially sorted by snail size.
 
-```{r n-snail-plot, fig.cap = "Number of snails per mesocosm in the three replicates apparently measured to one (dark purple) or two (light green) decimal places.", fig.height = 3, fig.width = 6}
+```{r n-snail-plot, fig.cap = "Number of snails per mesocosm in the three replicates apparently measured to one (dark purple) or two (light green) decimal places.", fig.height = 3, fig.width = 6, include=FALSE}
 raw_data %>% 
   mutate(
     last = round(size * 100) %% 10,
@@ -136,7 +135,7 @@ raw_data %>%
   theme(legend.position = "none") 
 ```
 
-```{r raw-data-plot, fig.cap = "Size of snails that died (blue) or survived (orange) against row number from three mesocosm.", fig.height = 3.5, fig.width = 4}
+```{r raw-data-plot, fig.cap = "Size of snails that died (blue) or survived (orange) against row number from three mesocosm.", fig.height = 3.5, fig.width = 4, include = FALSE}
 #example of raw data
 raw_data %>% 
   group_by(mesocosm) %>% 
@@ -234,19 +233,40 @@ C_min <- C_max %>%
 ```
 
 
-```{r ruggiero-plots, fig.cap = glue::glue("For the snail size data, A) distribution of Ruggiero similiarities between the mesocosms in the archived data, B) maximum Ruggiero similiarity between mesocosms for each of {n_ruggiero_rep} permutations, C) Ruggiero similiarities between pairs of mesocosms (red lines separate annotated replicates)."), fig.width=8, fig.height=8}
+```{r ruggiero-plots, fig.cap = glue::glue("For the snail size data, A) distribution of Ruggiero similiarities between the mesocosms in the archived data, B) maximum Ruggiero similiarity between mesocosms for each of {n_ruggiero_rep} permutations, C) Ruggiero similiarities between pairs of mesocosms (red lines separate annotated replicates)."), fig.width=8, fig.height=9}
+
+labs <- seq(0, 1, 0.1)
+labs[c(FALSE, TRUE)] <- ""
 
 #raw data histogram
 rugg_size_hist <- ruggiero2 %>% 
   ggplot(aes(x = rug)) + 
-  geom_histogram(bins = 30) +
-  labs(x = "Ruggiero similarity")
+  geom_histogram(bins = 30, boundary = 0) +
+  scale_x_continuous(limits = c(0, 1), expand = c(0.01, 0), breaks = seq(0, 1, 0.1), labels = labs) +
+  annotate(geom = "segment", 
+           x = max(ruggiero2$rug), 
+           xend = max(ruggiero2$rug), 
+           y = 220,
+           yend = 0, 
+           colour = "red", 
+           arrow = arrow(length = unit(0.03, "npc"))) +
+  annotate(geom = "text", label = "Maximum", x = max(ruggiero2$rug), y = 225, vjust = 0, hjust = 0.9, colour = "red") +
+  labs(x = "Ruggiero similarity in raw data")
  
 #random max similarity
 rugg_rand_hist <- rugg_rand_max %>% 
   ggplot(aes(x = mx)) +
-  geom_histogram(bins = 20) +
-  labs(x = "Maximum Ruggiero similarity in permutation")
+  geom_histogram(bins = 30, boundary = 0) +
+  annotate(geom = "segment", 
+           x = max(rugg_rand_max$mx), 
+           xend = max(rugg_rand_max$mx), 
+           y = 200,
+           yend = 0, 
+           colour = "red", 
+           arrow = arrow(length = unit(0.03, "npc"))) +
+  annotate(geom = "text", label = "Maximum", x = max(rugg_rand_max$mx), y = 205, vjust = 0, colour = "red") +
+  scale_x_continuous(limits = c(0, 1), expand = c(0.01, 0), breaks = seq(0, 1, 0.1), labels = labs) +
+  labs(x = "Maximum Ruggiero similarity in permutated data")
 
 #raster
 
@@ -270,8 +290,9 @@ rugg_raster <- ruggiero3 %>%
   annotate_textp("C - C", x = 5/6, y = 0.98, hjust = 0.5, vjust = 0, color = "white", box_just = 0.5) 
 
 #compile plots with patchwork
-(rugg_size_hist + rugg_rand_hist) / rugg_raster +
-  patchwork::plot_annotation(tag_levels = "A") + plot_layout(heights = c(0.2, 0.8))
+(rugg_size_hist / rugg_rand_hist) / rugg_raster +
+  patchwork::plot_annotation(tag_levels = "A") + 
+  plot_layout(heights = c(0.2, 0.2, 0.6))
 ```
 
 Some pairs of mesocosms have much higher Ruggiero similarities than expected from a random permutation of the data (Fig. \@ref(fig:ruggiero-plots)).
@@ -317,7 +338,7 @@ High similarities were not detected in either the activity or anti-predator resp
 ## Overlap between replicate C and the other replicates
 
 This section explores the high similarity between mesocosms in replicate C and the other two replicates in more detail.
-Figure \@ref(fig:replicates-A-B-vs-C) shows for each which measurements in replicate C (one column per mesocosm) are also present in each mesocosm in replicates A and B (rows, arranged by mesocosm number).
+Figure \@ref(fig:replicates-A-B-vs-C) shows for each snail in replicate C (one column per mesocosm) whether there is a snail the same size in each mesocosm from replicates A and B (rows, arranged by mesocosm number).
 Some measurements are expected to in common between the pairs of mesocosms, but long sequences are not.
 
 Mesocosm 3 includes all measurements from mesocosm 4; measurements not in mesocosm 4 are in mesocosm 2. 
