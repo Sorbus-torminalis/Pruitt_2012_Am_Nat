@@ -1,0 +1,586 @@
+---
+title: "Comment on Pruitt et al (2012) 'Behavioral Types of Predator and Prey Jointly Determine Prey Survival: Potential Implications for the Maintenance of Within-Species Behavioral Variation'"
+author: "Sorbus torminalis"
+date: "`r Sys.Date()`"
+output:
+  bookdown::pdf_document2:
+    keep_md: true
+    toc: false
+
+bibliography: bib/bib.bib
+csl: bib/the-american-naturalist.csl   
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, cache = TRUE, autodep = TRUE)
+library(here)
+library(tidyverse)
+library(janitor)
+library(ggalt)
+library(patchwork)
+library(simba)  
+library(ggVennDiagram)
+library(car)
+library(broom)
+library(kableExtra)
+source(here("R", "sim.R")) # modified version of simba::sim to return both upper and lower triangle of distance matrix
+
+set.seed(314)
+theme_set(theme_classic())
+```
+
+
+```{r download, include = FALSE}
+#create data directory if needed
+if(!fs::dir_exists(here("data"))){
+  fs::dir_create(here("data"))
+}
+
+target_file <-  "Pruitt et al. Dryad File_AmNat2012.xls"
+#download data if needed
+if(!fs::file_exists(here("data", target_file))){
+  print("Downloading file")
+  filelocation <- rdryad::dryad_download("10.5061/dryad.190pk253")
+  fs::file_move(
+    path = filelocation[[1]][1], 
+    new_path = here("data", target_file)
+  ) 
+}
+```
+
+
+```{r import, message = FALSE}
+raw_data <- readxl::read_excel(
+  path = here("data", target_file), 
+  sheet = "raw data") %>% 
+  clean_names() %>% 
+  filter(!is.na(mesocosm)) %>% #remove mean & SD calculations
+  rename(size = n_max)
+
+shell_size_fear <- readxl::read_excel(
+  path = here("data", target_file), 
+  sheet = "shell size by fear") %>% 
+  clean_names()
+
+#number of permutations for Ruggiero similarity null 
+n_ruggiero_rep <- 1000
+```
+
+# Introduction
+
+Several articles co-authored by Professor Pruitt have been shown to contain unexplained duplications in the raw data (e.g., @Laskowski2020-retract).
+This comment reports an attempt to detect duplications in @Pruitt2012.
+
+```{r n_snails}
+#range of number of snails per mesocosm
+n_snails <- raw_data %>% 
+  count(mesocosm) %>% 
+  summarise(min = min(n), mx = max(n), low  = sum(n < 37), n_meso = n())
+```
+
+```{r backtransform-sizes}
+#transform back to mm from z scores
+
+snail_sd <- 3.12
+snail_mean <- 17.46
+
+raw_data <- raw_data %>% 
+  mutate(size = size * snail_sd + snail_mean) %>% 
+  assertr::verify(near(size, round(size, 2))) %>% # check all are 2 decimal place
+  mutate(size = round(size, 2)) # remove rounding errors
+```
+
+
+```{r last-digit}
+last_digit <- raw_data %>% 
+  mutate(last = round(size * 100) %% 10) %>% 
+  count(last) %>% 
+  mutate(p = n/sum(n) * 100) # huge excess of 1
+
+last_digit_out <- list()
+last_digit_out$percent_last1 <- last_digit %>% 
+  filter(last == 1) %>%
+  pull(p) %>% 
+  round(1)
+
+last_digit_out$shell_size_fear_last <- shell_size_fear %>% 
+   mutate(last = (round(shell_diameter * 100) %% 10)) %>% 
+  count(last) %>% 
+  mutate(p = n/sum(n) * 100) # huge excess of 1
+```
+
+# Data description
+
+Partial raw data are archived as an Excel file [@Pruitt2011_data].
+The sheet `raw data` includes data for activity, size (as `N Max`), anti-predator response, and survivorship for `r nrow(raw_data)` snails in `r max(raw_data$mesocosm)` mesocosms across three replicates (A-C).
+Size and anti-predator response are presented as _z_-scores. 
+Size can be back-transformed to millimetres with the mean and standard deviation reported in the article.
+After back-transformation, a large fraction of the measurements (`r last_digit_out$percent_last1`%) end in a one, perhaps suggesting that the reported mean is 0.01 mm too large and that most snails were measured to one decimal place, and the rest to two. 
+This is supported by a second Excel sheet (`shell size by fear`) which reports snail sizes in millimetres (without metadata) has a similarly large fraction of measurements with a terminal zero.
+Mesocosms have between `r n_snails$min` and `r n_snails$mx` snails, whereas the article reports that 37--46 snails are used in each mesocosm: `r n_snails$low` mesocosms have fewer snails than the reported minimum.
+The number of snails per mesocosm is varied in replicates A and B, but mostly consistent in replicate C (Fig. \@ref(fig:n-snail-plot)).
+Within each mesocosm the data are sorted by survival and partially sorted by snail size (Fig. \@ref(fig:raw-data-plot)).
+
+```{r n-snail-plot, fig.cap = "Number of snails per mesocosm in the three replicates apparently measured to one (dark purple) or two (light green) decimal places.", fig.height = 3, fig.width = 6}
+raw_data %>% 
+  mutate(
+    last = round(size * 100) %% 10,
+    last1 = factor(last == 1, labels = c("2 D.P.", "1 D.P."))
+    ) %>% 
+  ggplot(aes(x = factor(mesocosm), fill = last1)) + 
+  geom_bar() + 
+  facet_wrap(~replicate, scales = "free_y") +
+  scale_fill_viridis_d(end = 0.8, limits = c("1 D.P.", "2 D.P.")) + 
+  coord_flip() +
+  labs(x = "Mesocosm", y = "Count", fill = "Apparent resolution") +
+  theme(legend.position = "none") 
+```
+
+```{r raw-data-plot, fig.cap = "Size of snails that died (blue) or survived (orange) against row number from three mesocosm.", fig.height = 3.5, fig.width = 4}
+#example of raw data
+raw_data %>% 
+  group_by(mesocosm) %>% 
+  mutate(row = 1:n()) %>%
+  filter(mesocosm %in% c(1:3)) %>% 
+  ggplot(aes(x = row, y = size, colour = factor(survival_1_0))) +
+  geom_point(show.legend = FALSE) +
+  scale_colour_viridis_d(option = "C", end = 0.8) +
+  facet_wrap(~mesocosm, ncol = 1) +
+  labs(x = "Row", y = "Size mm", colour = "Survival")
+```
+
+# Methods
+
+Because the data have been sorted, tests for duplicate sequences such as sequenceSniffer [@Rutten2020] have a reduced utility because sequences may have been disrupted by sorting, or false positive duplicate sequences generated.
+
+Instead, I test whether the overlap between measurements for the different mesocosms is higher than expected. 
+With a slightly modified version of the `simba` package [@simba] in R [@R], I calculate the Ruggiero similarity [@Ruggiero1998] between mesocosms. 
+The Ruggiero similarity ($a/(a + c)$ where $a$ is the number of shared attributes and $c$ is the number of attributes found only in the second sample) is one when all members of the second sample are in the first. 
+I make all repeated values distinct, so if there are repeated values in mesocosm 2, there needs to be at least as many repeats of that value in mesocosm 1 to get a similarity of one.
+
+The expected distribution of Ruggiero similarities is estimated by permuting the snail sizes within each replicate and recalculating the similarities `r n_ruggiero_rep` times.
+This mimics the description in the article which reports that "Randomly selected, individually marked snails ...  were placed within each ... mesocosms".
+
+```{r ruggiero}
+# similarity between size measurements in different mesocosms
+ruggiero <- raw_data %>% 
+  group_by(mesocosm, size) %>% 
+  mutate(size2 = paste(size, 1:n(), sep = "_")) %>% #make unique within each mesocosm
+  ungroup() %>% 
+  count(mesocosm, size2) %>% # formats data as required by simba: three columns representing plots, species and occurrence information 
+  sim(method = "ruggiero", listout = FALSE, listin = TRUE) 
+
+#convert distance matrix to long tibble
+ ruggiero2 <- ruggiero %>% 
+    as.data.frame() %>% 
+    rownames_to_column(var = "xid") %>% 
+    pivot_longer(-xid, names_to = "yid", values_to = "rug") %>% 
+    filter(xid != yid) %>%  # remove diagonal
+    mutate(across(everything(), as.numeric))
+ 
+# Null model. Permutation of sizes within replicates
+# find similarity of mesocosms with permuted data 
+random_ruggiero <- rerun(n_ruggiero_rep, {
+  ruggiero <- raw_data %>%
+    group_by(replicate) %>% 
+    mutate(size = sample(size)) %>% #randomise
+    group_by(mesocosm, size) %>% 
+    mutate(size2 = paste(size, 1:n(), sep = "_")) %>% 
+    ungroup() %>% 
+    count(mesocosm, size2) %>% 
+    sim(method = "ruggiero", listout = FALSE, listin = TRUE) 
+
+ ruggiero %>% 
+    as.data.frame() %>% 
+    rownames_to_column(var = "xid") %>% 
+    pivot_longer(-xid, names_to = "yid", values_to = "rug") %>% 
+    filter(xid != yid) %>%  # remove diagonal
+    mutate(across(everything(), as.numeric))
+})
+
+#find max of random trials
+rugg_rand_max <- random_ruggiero %>% 
+  set_names(1:length(.)) %>% 
+  bind_rows(.id = "n") %>% 
+  group_by(n) %>% 
+  summarise(mx = max(rug), .groups = "drop") 
+```
+
+# Results
+
+```{r replicate-C}
+snail_meta <- raw_data %>% distinct(replicate, mesocosm)
+
+ruggiero3 <- ruggiero2 %>%
+  left_join(snail_meta, by = c(xid = "mesocosm")) %>% 
+  mutate(xid = factor(xid), xid = fct_reorder(xid, as.numeric(factor(replicate)))) %>% 
+  rename(replicate1 = replicate) %>% 
+  left_join(snail_meta, by = c(yid = "mesocosm")) %>% 
+  mutate(yid = factor(yid), yid = fct_reorder(yid, as.numeric(factor(replicate)))) %>% 
+  rename(replicate2 = replicate) %>% 
+  mutate(rug_class = case_when(rug  == 1 ~ "1",
+                          rug > 0.9 ~ "> 0.9",
+                          rug > 0.8 ~ "> 0.8",
+                          rug > 0.7 ~ "> 0.7",
+                          TRUE ~ "< 0.7")) 
+
+C_max <- ruggiero3 %>% 
+  group_by(xid) %>% 
+  filter(replicate1 == "C") %>% 
+  slice(which.max(rug)) %>% 
+  ungroup() 
+C_min <- C_max %>% 
+  summarise(m = min(rug))
+```
+
+
+```{r ruggiero-plots, fig.cap = glue::glue("For the snail size data, A) distribution of Ruggiero similiarities between the mesocosms in the archived data, B) maximum Ruggiero similiarity between mesocosms for each of {n_ruggiero_rep} permutations, C) Ruggiero similiarities between pairs of mesocosms (red lines separate annotated replicates)."), fig.width=8, fig.height=8}
+
+#raw data histogram
+rugg_size_hist <- ruggiero2 %>% 
+  ggplot(aes(x = rug)) + 
+  geom_histogram(bins = 30) +
+  labs(x = "Ruggiero similarity")
+ 
+#random max similarity
+rugg_rand_hist <- rugg_rand_max %>% 
+  ggplot(aes(x = mx)) +
+  geom_histogram(bins = 20) +
+  labs(x = "Maximum Ruggiero similarity in permutation")
+
+#raster
+
+rugg_raster <- ruggiero3 %>% 
+  ggplot(aes(x = xid, y = yid, fill = rug_class)) + 
+    geom_raster() +
+    scale_fill_viridis_d()  + 
+    geom_vline(xintercept = c(18.5, 36.5), colour = "red") +
+    geom_hline(yintercept = c(18.5, 36.5), colour = "red") +
+    labs(x = "Mesocosm 1", y = "Mesocosm 2", fill = "Ruggiero\nsimilarity") +
+    theme(panel.grid = element_blank(), 
+          axis.text.x = element_text(angle = 90, vjust = 0.5)) +
+   annotate_textp("A - A", x = 1/6, y = 0.3, hjust = 0.5, vjust = 0, color = "white", box_just = 0.5) + 
+  annotate_textp("A - B", x = 1/6, y = 0.64, hjust = 0.5, vjust = 0, color = "white", box_just = 0.5) + 
+  annotate_textp("A - C", x = 1/6, y = 0.98, hjust = 0.5, vjust = 0, color = "white", box_just = 0.5) +
+   annotate_textp("B - A", x = 1/2, y = 0.3, hjust = 0.5, vjust = 0, color = "white", box_just = 0.5) + 
+  annotate_textp("B - B", x = 1/2, y = 0.64, hjust = 0.5, vjust = 0, color = "white", box_just = 0.5) + 
+  annotate_textp("B - C", x = 1/2, y = 0.98, hjust = 0.5, vjust = 0, color = "white", box_just = 0.5) +
+  annotate_textp("C - A", x = 5/6, y = 0.3, hjust = 0.5, vjust = 0, color = "white", box_just = 0.5) + 
+  annotate_textp("C - B", x = 5/6, y = 0.64, hjust = 0.5, vjust = 0, color = "white", box_just = 0.5) + 
+  annotate_textp("C - C", x = 5/6, y = 0.98, hjust = 0.5, vjust = 0, color = "white", box_just = 0.5) 
+
+#compile plots with patchwork
+(rugg_size_hist + rugg_rand_hist) / rugg_raster +
+  patchwork::plot_annotation(tag_levels = "A") + plot_layout(heights = c(0.2, 0.8))
+```
+
+Some pairs of mesocosms have much higher Ruggiero similarities than expected from a random permutation of the data (Fig. \@ref(fig:ruggiero-plots)).
+For example, `r sum(ruggiero2$rug == 1)` pairs of mesocosms have a Ruggiero similarity of 1 (Fig. \@ref(fig:ruggiero-plots)A), that is the measurements in the smaller mesocosm are a subset of those in the larger mesocosm.
+A further `r sum(ruggiero2$rug > 0.8 & ruggiero2$rug < 1)` pairs of mesocosms have a Ruggiero similarity above 0.8 (Fig. \@ref(fig:ruggiero-plots)A).
+In contrast, the 99^th^ percentile of the maximum similarity found in `r n_ruggiero_rep` permutations is `r quantile(rugg_rand_max$mx, prob = 0.99) %>% round(2)` and the highest maximum observed was `r max(rugg_rand_max$mx) %>% round(2)` (Fig. \@ref(fig:ruggiero-plots)B).
+Similarities between mesocosms above 0.8 are therefore expected to be very rare, and datasets with many such similarities should be exceedingly rare.
+
+
+There are a few pairs of mesocosms with high similarities within replicates, but most of the pairs are when mesocsoms from replicates A and B are subsets of the larger replicate C mesocosms. 
+All of the mesocosm in replicate C have a similarity of at least `r round(C_min$m, 3)` with mesocosms in replicates A or B.
+
+```{r coverage}
+last <- raw_data %>% 
+  select(replicate, mesocosm, size) %>% 
+  mutate(dp = if_else(round(size * 100, 2) %% 10 == 1, "one", "two"))
+
+coverage <- last %>% 
+  distinct(dp, size) %>%
+  mutate(int = floor(size)) %>% 
+  group_by(dp) %>% 
+  count(int) %>% #ignores zero counts
+  summarise(m = mean(n)) %>% 
+  mutate(p = if_else(dp == "one", m / 10, m / 90))
+```
+
+There are no size measurements unique to replicate C (Fig. \@ref(fig:unique-to-C)), even though this replicate has the most snails, and, at least for the data apparently measured to two decimal places, only a small proportion (< 10%) of possible sizes have been used.
+
+```{r unique-to-C, fig.cap = "Venn diagram of the size measurements by replicate", fig.height = 3.5, fig.width = 4.5}
+raw_data %>% 
+  distinct(replicate, size) %>% #unnecessary as Venn diagram uses sets
+  group_by(replicate) %>% 
+  group_split() %>% 
+  set_names(c("A", "B", "C")) %>% 
+  map(pull, size) %>% 
+  ggVennDiagram()
+```
+
+High similarities were not detected in either the activity or anti-predator response data.
+
+
+
+## Overlap between replicate C and the other replicates
+
+This section explores the high similarity between mesocosms in replicate C and the other two replicates in more detail.
+Figure \@ref(fig:replicates-A-B-vs-C) shows for each which measurements in replicate C (one column per mesocosm) are also present in each mesocosm in replicates A and B (rows, arranged by mesocosm number).
+Some measurements are expected to in common between the pairs of mesocosms, but long sequences are not.
+
+Mesocosm 3 includes all measurements from mesocosm 4; measurements not in mesocosm 4 are in mesocosm 2. 
+Almost all the measurement from mesocosm 6 overlap with measurements from mesocosm 5.
+Further across, about half of mesocosm 12 overlaps with mesocosm 8, and half with mesocosm 10, which in turn overlaps the first part of mesocosm 15.
+Similar overlaps of whole or part mesocosms appear for most or all of replicate C.
+
+```{r replicates-A-B-vs-C, fig.height = 9, fig.width = 9.5, fig.cap = "Measurements in common (purple) between mesocosms in replicate C (columns) and mesocosms in replicates A and B (rows). Axes are size against snail row number within replicate C.", fig.height = 8, fig.width = 8}
+#extract replicate C mesocosms
+replicate_C <- raw_data %>% 
+  filter(replicate == "C") %>% 
+  select(mesocosmC = mesocosm, size) %>% 
+  mutate(n = 1:n()) #sequential numbers
+
+
+raw_data %>% 
+  filter(replicate != "C") %>% #get other replicates
+  select(replicate, mesocosm, size) %>% 
+  group_by(replicate, mesocosm) %>% 
+  nest() %>% 
+  mutate(df = map(data, # for each mesocosm in A/B find matching measurements in replicate C
+                  ~left_join(
+                    replicate_C, 
+                    .x %>% mutate(one = 1), #dummy column to show match made
+                    by = "size"))) %>% 
+  select(-data) %>% 
+  unnest(df) %>% 
+  ggplot(aes(x = n, y = size, colour = is.na(one))) +
+  geom_point(show.legend = FALSE, size = 1) +
+  scale_colour_viridis_d(end = 0.9) +
+  facet_grid(mesocosm ~ mesocosmC, scales = "free_x") +
+  scale_y_continuous(breaks = c(15, 25)) +
+  labs(y = "Size mm", x = "Row") +
+  theme(panel.spacing = unit(0.4, "mm"), 
+        strip.text.y = element_text(angle = 0), 
+        axis.text.x = element_blank()
+        )
+```
+
+## Authors' Response
+
+In their response to the first version of this comment, the authors wrote:
+
+> snails with identical shell diameters were deliberately split between mesocosms, thus strong overlap between sets of mesocosms set up at the same time is expected. 
+
+This sets up two testable predictions: that there should be fewer snails with identical sizes in each mesocosm than expected under a null model of random assignment; and that pairs of mesocosms with high similarities should tend to occur in the same replicate.
+
+```{r duplicates-test}
+dups <- raw_data %>% 
+  group_by(replicate, mesocosm) %>% 
+  count(size) %>% 
+  filter(n > 1) %>% 
+  summarise(mx = max(n), sum = sum(n), number = n(), dup = sum - number, .groups = "drop_last")
+
+dups_summary <- dups %>% 
+  summarise(across(c(mx, sum, number, dup), mean), .groups = "drop")
+
+dups_rand <- rerun(n_ruggiero_rep, 
+  raw_data %>%
+     mutate(last1 = round(size * 100) %% 10 == 1) %>% 
+  group_by(replicate, last1) %>% # make sure distribution of 1 & 2 dp values is maintained
+  mutate(size = sample(size)) %>% 
+  group_by(replicate, mesocosm) %>% 
+  count(size) %>% 
+  filter(n > 1) %>% 
+  summarise(sum = sum(n), number = n(), dup = sum - number, .groups = "drop_last") %>% 
+  summarise(across(c(sum, number, dup), mean), .groups = "drop")
+  ) %>% 
+  bind_rows(.id = "run")
+```
+
+
+```{r duplicates-test-plot, fig.cap = glue::glue("Mean number of repeated shell sizes in each mesocosm per replicate. Observed number shown by red dots, distribution of repeats in {n_ruggiero_rep} permutations shown by violins."), fig.height = 3.5, fig.width = 4}
+ggplot(dups_rand, aes(x = replicate, y = dup)) + 
+  geom_violin(draw_quantiles = c(0.25, 0.75), alpha = 0.3, fill = "grey70") +
+  geom_point(data = dups_summary, colour =  "red", size = 3, position = position_dodge(width = 1)) +
+  labs(x = "Replicate", y = "Mean no. repeated sizes per mesocosm")
+```
+
+
+Neither prediction is supported by the the data:
+repeated sizes are not less common than expected (Fig. \@ref(fig:duplicates-test-plot);
+and most pairs of mesocosms with high similarity are between rather than within replicates (Fig. \@ref(fig:replicates-A-B-vs-C)).
+
+# Conclusions
+
+```{r how-unlikely}
+#pbinom
+#lower triangle
+rug_sum <- ruggiero3 %>% 
+  filter(paste(replicate1, xid) > paste(replicate2, yid)) %>% 
+  summarise(n = n(), high = sum(rug > 0.8))
+
+
+rug_prob <- pbinom(q = rug_sum$high - 1,
+       size = rug_sum$n, 
+       prob = 1/(rug_sum$n * n_ruggiero_rep), lower.tail = FALSE)
+```
+
+There are unexpectedly high similarities between size measurements in the different mesocosms.
+An important question is how unlikely are the observed patterns in the data to occur by chance.
+With the result presented above, it is possible to set an upper bound on this probability.
+Considering only the lower triangle of the distance matrix (as the upper triangle is not independent), `r n_ruggiero_rep` $\times$ `r rug_sum$n` pairs of mesocosms were tested to yield the maximum similarity of `r max(rugg_rand_max$mx) %>% round(2)`, so pairs of mesocosms with a similarity > 0.8 must have a probability of occurrence less than `r (1/(n_ruggiero_rep * rug_sum$n)) %>% signif(2)`. 
+The probability of getting `r rug_sum$high` or more such pairs is `r (rug_prob * 2 * 3) %>% signif(2)` after allowing for the choice of the upper or lower triangle and size rather than the other response variables.
+
+Snail size is an important variable in @Pruitt2012.
+This comment shows that it is very unlikely to have been collected using the methods reported in the original article.
+If it cannot be relied upon, parts of the results become questionable.
+
+# Reproducibility
+
+All analyses in this comment can be reproduced with an rmarkdown document archived at https://github.com/Sorbus-torminalis/Pruitt_2012_Am_Nat
+
+# References {-}
+
+<div id="refs"></div>
+
+# Appendix A {-}
+
+If the snails are randomly allocated to mesocosms within each replicate, one would expect the means and variances to be similar.
+This can be tested with ANOVAs and Levene's tests.
+All three ANOVA (Table \@ref(tab:lm-levene)), and two of the Levene's tests are highly significant, suggesting that the randomisation was not very effective. 
+Figure \@ref(fig:mesocosm-size-plots) shows that some mesocosms in each replicate have smaller sized snails that expected 
+
+```{r lm-levene}
+#differences in means
+mod_A <- raw_data %>% 
+  filter(replicate == "A") %>% 
+  mutate(mesocosm = factor(mesocosm)) %>% 
+  lm(size ~ mesocosm, data = .)
+
+mod_B <- raw_data %>% 
+  filter(replicate == "B") %>% 
+  mutate(mesocosm = factor(mesocosm)) %>% 
+  lm(size ~ mesocosm, data = .)
+
+mod_C <- raw_data %>% 
+  filter(replicate == "C") %>% 
+  mutate(mesocosm = factor(mesocosm)) %>% 
+  lm(size ~ mesocosm, data = .)
+
+anovas <- list(A = mod_A, B = mod_B, C = mod_C) %>% 
+  map_dfr(broom::glance, .id = "Replicate") %>% 
+  select(Replicate, df, `residual df` = df.residual, `F` = statistic, `p value` = p.value) %>% 
+  mutate(`p value` = format(`p value`, digits = 2)) 
+
+
+# Levenes tests homogeneity_variance
+Lev_A <- leveneTest(size ~ factor(mesocosm), data = raw_data %>% filter(replicate == "A"), center = "median")
+Lev_B <- leveneTest(size ~ factor(mesocosm), data = raw_data %>% filter(replicate == "B"), center = "median")
+Lev_C <- leveneTest(size ~ factor(mesocosm), data = raw_data %>% filter(replicate == "C"), center = "median")
+
+levenes <- list(A = Lev_A, B = Lev_B, C = Lev_C) %>% 
+  map_dfr(broom::tidy, .id = "Replicate") %>% 
+  select(Replicate, df, `residual df` = df.residual, `F` = statistic, `p value` = p.value) %>% 
+  mutate(`p value` = format(`p value`, digits = 2))
+
+left_join(anovas, levenes, by = c("Replicate", "df", "residual df"), suffix = c("", " ")) %>% 
+  kbl(booktabs = TRUE, digits = 2, caption = "ANOVA and Levene's tests of snail sizes in the different mesocosms in each replicate.") %>%
+  kable_styling(latex_options = "striped") %>% 
+  add_header_above(c(" " = 3, "ANOVA" = 2, "Levene's test" = 2))
+```
+
+
+```{r mesocosm-size-plots, fig.cap = "Snail size for each mesocosm in each replicate. Horizontal lines are the mean for each replicate.", fig.width = 6, fig.height = 3.5}
+raw_data %>% 
+  mutate(mesocosm = factor(mesocosm)) %>% 
+  ggplot(aes(x = mesocosm, y = size, fill = replicate)) +
+  geom_boxplot(show.legend = FALSE) +
+  geom_hline(aes(yintercept = y), raw_data %>% 
+               group_by(replicate) %>% 
+               summarise(y = mean(size), .groups = "drop")) +
+  scale_fill_brewer(palette = "Set1") +
+  labs(x = "Mesocosm", y = "Size mm") +
+  facet_wrap(~ replicate, scales = "free_x") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+```
+```{r cache=FALSE}
+#don't make remaining plots
+knitr::knit_exit()
+```
+
+
+# Appendix B {-}
+
+## Within replicate A
+
+```{r replicateA}
+## within A
+raw_data %>% 
+  filter(replicate == "A") %>% 
+  select(replicate, mesocosm, size) %>% 
+  group_by(replicate, mesocosm) %>% 
+  nest() %>% 
+  mutate(df = map(data, ~left_join(raw_data %>% mutate(n = 1:nrow(.)) %>% 
+  filter(replicate == "A") %>% 
+  select(mesocosmA = mesocosm, size, n), .x %>% mutate(one = 1), by = "size"))) %>% 
+  select(-data) %>% 
+  unnest(df) %>% 
+  filter(mesocosm != mesocosmA) %>% 
+  ggplot(aes(x = n, y = size, colour = is.na(one))) +
+  geom_point(show.legend = FALSE, size = 1) +
+   scale_colour_viridis_d(end = 0.9) +
+  facet_grid(mesocosm ~ mesocosmA, scales = "free_x") +
+  scale_y_continuous(breaks = c(15, 25)) +
+  labs(y = "Size mm", x = "Row") +
+  theme(panel.spacing = unit(0.4, "mm"), 
+        strip.text.y = element_text(angle = 0), 
+        axis.text.x = element_blank()
+        )
+```
+
+## Within replicate B {-}
+
+```{r replicateB}
+## within B
+raw_data %>% 
+  filter(replicate == "B") %>% 
+  select(replicate, mesocosm, size) %>% 
+  group_by(replicate, mesocosm) %>% 
+  nest() %>% 
+  mutate(df = map(data, ~left_join(raw_data %>% mutate(n = 1:nrow(.)) %>% 
+  filter(replicate == "B") %>% 
+  select(mesocosmB = mesocosm, size, n), .x %>% mutate(one = 1), by = "size"))) %>% 
+  select(-data) %>% 
+  unnest(df) %>% 
+  filter(mesocosm != mesocosmB) %>% 
+  ggplot(aes(x = n, y = size, colour = is.na(one))) +
+  geom_point(show.legend = FALSE, size = 1) +
+  scale_colour_viridis_d(end = 0.9) +
+  facet_grid(mesocosm ~ mesocosmB, scales = "free_x") + 
+  scale_y_continuous(breaks = c(15, 25)) +
+  labs(y = "Size mm", x = "Row") +
+  theme(panel.spacing = unit(0.4, "mm"), 
+        strip.text.y = element_text(angle = 0), 
+        axis.text.x = element_blank()
+        )
+```
+
+
+## Replicate A vs replicate B {-}
+
+```{r replicates-A-vs-B}
+## A vs B
+raw_data %>% 
+  filter(replicate == "A") %>% 
+  select(replicate, mesocosm, size) %>% 
+  group_by(replicate, mesocosm) %>% 
+  nest() %>% 
+  mutate(df = map(data, ~left_join(raw_data %>% mutate(n = 1:nrow(.)) %>% 
+  filter(replicate == "B") %>% 
+  select(mesocosmB = mesocosm, size, n), .x %>% mutate(one = 1), by = "size"))) %>% 
+  select(-data) %>% 
+  unnest(df) %>% 
+  filter(mesocosm != mesocosmB) %>% 
+  ggplot(aes(x = n, y = size, colour = is.na(one))) +
+  geom_point(show.legend = FALSE, size = 1) +
+  scale_colour_viridis_d(end = 0.9) +
+  facet_grid(mesocosm ~ mesocosmB, scales = "free_x") +
+  scale_y_continuous(breaks = c(15, 25)) +
+  labs(y = "Size mm", x = "Row") +
+  theme(panel.spacing = unit(0.4, "mm"), 
+        strip.text.y = element_text(angle = 0), 
+        axis.text.x = element_blank()
+        )
+```
