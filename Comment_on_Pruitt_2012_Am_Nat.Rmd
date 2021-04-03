@@ -1,5 +1,6 @@
 ---
 title: "Comment on Pruitt et al (2012) 'Behavioral Types of Predator and Prey Jointly Determine Prey Survival: Potential Implications for the Maintenance of Within-Species Behavioral Variation'"
+author: Sorbus torminalis
 date: "`r Sys.Date()`"
 output:
   bookdown::pdf_document2:
@@ -68,7 +69,7 @@ n_ruggiero_rep <- 1000
 # Introduction
 
 Several articles co-authored by Professor Pruitt have been shown to contain unexplained duplications in the raw data (e.g., @Laskowski2020-retract).
-This Comment reports an evaluation of whether such duplicates exist in the data for @Pruitt2012.
+This Comment reports an evaluation of whether any such duplicates exist in the data for @Pruitt2012.
 
 ```{r n_snails}
 #range of number of snails per mesocosm
