@@ -1,10 +1,10 @@
 # Comment on Pruitt et al (2012)
 
 [Pruitt et al (2012)](https://doi.org/10.1086/663680) present and analyse behavioural and morphometric data on snails and their sea star predators.
-This comment checks the snail data for evidence of data duplication that has been detected in some other papers by the same first author.
+This comment evaluates the snail data for evidence of data duplication that has been detected in some other papers by the same first author.
 
 Unfortunately the raw data have been sorted. 
-This complicates the checking for duplicates as methods such as [sequenceSniffer](https://github.com/alrutten/sequenceSniffer) may suffer false positives, or miss sequences that have been disrupted.
+This complicates the checking for duplicates as methods such as [sequenceSniffer](https://github.com/alrutten/sequenceSniffer) cannot be used.
 Instead, this comment looks at the similarity between the sizes in different subsets of the data and compares the results to a null model.
 
 The comment finds that some subsets of the data are much more similar to each other than expected by chance.
